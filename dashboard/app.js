@@ -48,10 +48,11 @@ for (const pair of location.hash.replace(/^#/, '').split('&')) {
 
 function stats() {
   const box = $('stats');
+  const onBoard = R.rows.filter((r) => r.watchlist).length;
   const items = [
     [String(R.protocol_count), 'protocols in snapshot'],
     [String(R.pretoken_count), 'pre-token, ranked'],
-    [String(R.watchlist_count), 'watchlist covered'],
+    [`${onBoard}/${R.watchlist_count}`, 'watchlist on board'],
     [money(R.total_implied_usd), 'total implied value'],
     [money(R.total_airdrop_pool_usd), 'est. airdrop pools'],
   ];
@@ -97,7 +98,9 @@ function visibleRows() {
   let rows = state.view === 'board' ? R.rows : R.live;
   if (state.view === 'board' && state.watch) rows = rows.filter((r) => r.watchlist);
   if (state.cat) rows = rows.filter((r) => (r.category ?? 'Uncategorised') === state.cat);
-  if (state.chain) rows = rows.filter((r) => r.chains && r.chains.includes(state.chain));
+  // Launched rows carry no chain list, so the chain filter belongs to
+  // the board; applying it here would silently empty the launched view.
+  if (state.view === 'board' && state.chain) rows = rows.filter((r) => r.chains.includes(state.chain));
   if (state.q) rows = rows.filter((r) => r.name.toLowerCase().includes(state.q) || r.slug.includes(state.q));
   const key = state.sort;
   rows = [...rows].sort((a, b) => {
@@ -130,6 +133,7 @@ function boardTable(rows) {
   head(BOARD_COLS);
   const body = $('body');
   body.textContent = '';
+  const top = R.rows.length ? R.rows[0].implied_value_usd : 1;
   for (const r of rows.slice(0, 250)) {
     const tr = el('tr', r.slug === state.slug ? 'sel' : '');
     const rank = el('td', 'rank', String(r.rank));
@@ -138,13 +142,18 @@ function boardTable(rows) {
     if (r.watchlist) name.append(el('span', 'badge', 'Watchlist'));
     name.append(el('span', 'slug', r.slug));
     const ch = el('td', 'chains', r.chains.slice(0, 2).join(' · ') + (r.chains.length > 2 ? ` +${r.chains.length - 2}` : ''));
+    const imp = el('td', 'num imp');
+    imp.append(document.createTextNode(money(r.implied_value_usd)));
+    const bar = el('div', 'bar');
+    bar.style.width = Math.max(2, Math.round((r.implied_value_usd / top) * 100)) + '%';
+    imp.append(bar);
     tr.append(
       rank, name,
       el('td', '', r.category ?? '—'), ch,
       el('td', 'num', money(r.tvl_usd)),
       el('td', 'num ' + (r.change_7d > 0 ? 'pos' : r.change_7d < 0 ? 'neg' : ''), pct(r.change_7d)),
       el('td', 'num', r.multiple.toFixed(2)),
-      el('td', 'num', money(r.implied_value_usd)),
+      imp,
     );
     tr.onclick = () => { state.slug = r.slug; render(); };
     body.append(tr);
@@ -175,10 +184,12 @@ function detail() {
   box.textContent = '';
   if (state.view === 'live') {
     box.append(el('h2', '', 'Already launched'));
+    const totalMcap = R.live.reduce((sum, x) => sum + x.mcap_usd, 0);
     box.append(el('p', 'hint',
-      'These protocols already trade, so the radar does not rank them — it learns from them. ' +
-      'Each one\'s market-cap/TVL ratio feeds the category multiples that price the pre-token board. ' +
-      'The global median multiple across all of them is ×' + R.global_multiple.toFixed(2) + '.'));
+      `${R.live.length} protocols already trade, ${money(totalMcap)} of combined market cap, so the radar ` +
+      'does not rank them — it learns from them. Each one\'s market-cap/TVL ratio feeds the category ' +
+      'multiples that price the pre-token board. The global median multiple across all of them is ×' +
+      R.global_multiple.toFixed(2) + '.'));
     const h = el('h3', '', 'Category multiples (median, traded peers)');
     box.append(h);
     for (const c of R.category_multiples.slice(0, 12)) {
@@ -221,14 +232,15 @@ function detail() {
   box.append(el('h3', '', 'How the radar prices it'));
   const eq = el('div', 'eq');
   const lines = [
-    ['TVL (snapshot)', moneyFull(r.tvl_usd)],
-    ['× category multiple', factor(r.multiple)],
-    ['× 7-day momentum', factor(r.momentum_factor)],
-    ['× age with no token', factor(r.age_factor)],
-    ['× chain breadth', factor(r.breadth_factor)],
+    ['TVL (snapshot)', moneyFull(r.tvl_usd), ''],
+    ['× category multiple', factor(r.multiple), ''],
+    ['= base value at traded-peer pricing', moneyFull(r.base_value_usd), 'base'],
+    ['× 7-day momentum' + (r.change_7d === null ? '' : ` (TVL ${pct(r.change_7d)})`), factor(r.momentum_factor), ''],
+    ['× age with no token' + (r.age_days === null ? '' : ` (${years(r.age_days)})`), factor(r.age_factor), ''],
+    [`× chain breadth (${r.chains.length} ${r.chains.length === 1 ? 'chain' : 'chains'})`, factor(r.breadth_factor), ''],
   ];
-  for (const [k, v] of lines) {
-    const line = el('div', 'line');
+  for (const [k, v, cls] of lines) {
+    const line = el('div', 'line' + (cls ? ' ' + cls : ''));
     line.append(el('span', '', k), el('span', '', v));
     eq.append(line);
   }
@@ -236,6 +248,13 @@ function detail() {
   total.append(el('span', '', 'Implied launch value'), el('span', '', moneyFull(r.implied_value_usd)));
   eq.append(total);
   box.append(eq);
+  const pricedByPeers = r.peer_count > 0 && r.category !== null;
+  box.append(el('p', 'hint eq-note', pricedByPeers
+    ? `The ${factor(r.multiple)} multiple is the median market-cap/TVL of the ${r.peer_count} traded ` +
+      `${r.category} protocol${r.peer_count === 1 ? '' : 's'} in this snapshot, blended toward the global median ` +
+      `(${factor(R.global_multiple)}) and capped at ×3.00.`
+    : `No traded peers price this category in the snapshot, so it is priced at the global median ` +
+      `multiple ${factor(R.global_multiple)}, taken from ${R.global_comps} traded protocols.`));
 
   box.append(el('h3', '', 'If it launches'));
   const pool = el('p', '',

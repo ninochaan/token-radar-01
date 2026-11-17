@@ -90,6 +90,10 @@ td.name .slug { display: block; font-weight: 400; color: var(--faint); font-size
   vertical-align: 2px; font-weight: 700;
 }
 .pos { color: var(--accent); } .neg { color: var(--red); }
+td.imp .bar {
+  height: 3px; border-radius: 2px; margin: 4px 0 1px auto; min-width: 3px;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+}
 .chains { color: var(--dim); font-size: 12.5px; }
 .empty { color: var(--dim); padding: 22px; margin: 0; }
 .detail {
@@ -105,7 +109,9 @@ td.name .slug { display: block; font-weight: 400; color: var(--faint); font-size
 .eq { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; margin: 12px 0; }
 .eq .line { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 13px; padding: 2.5px 0; }
 .eq .line span:first-child { color: var(--dim); font-family: var(--sans); }
+.eq .line.base { color: var(--dim); border-bottom: 1px dashed var(--line); padding-bottom: 6px; margin-bottom: 4px; }
 .eq .total { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 8px; color: var(--accent); font-size: 14.5px; }
+.eq-note { font-size: 12.5px; margin: 0 0 4px; }
 .detail h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .9px; color: var(--dim); margin: 17px 0 8px; }
 .steps { margin: 0; padding-left: 21px; }
 .steps li { margin-bottom: 9px; color: var(--ink); }
