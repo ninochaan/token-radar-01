@@ -22,10 +22,14 @@ watchlist are covered.
 
 Each board row carries a farm plan generated from the protocol's own
 record — its category's playbook, its cheapest chain's gas level, its
-TVL size tier — with a dollar cost and a time for every step. The
-dashboard (`dashboard/`) is sortable and filterable (search, category,
-chain, watchlist-only), separates the already-launched protocols that
-calibrate the model, and shows the full pricing equation per protocol.
+TVL size tier — and the closing steps quote the protocol's own TVL and
+seven-day move, so no two plans differ only in the name. Every step
+names a dollar cost and a time. The dashboard (`dashboard/`) is
+sortable and filterable (search, category, chain, watchlist-only),
+separates the already-launched protocols that calibrate the model,
+and shows the full pricing equation per protocol, including the base
+value at traded-peer pricing and how many traded peers set the
+multiple.
 `main.ts` also writes `board.json` and the judge's `dossier.json`
 (via the vendored `vendor/makefun-board.ts`). Deterministic: the same
 snapshot produces byte-identical output on every run.
