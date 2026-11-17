@@ -53,6 +53,8 @@ export interface RadarRow {
   age_days: number | null;
   watchlist: boolean;
   multiple: number;
+  peer_count: number;
+  base_value_usd: number;
   momentum_factor: number;
   age_factor: number;
   breadth_factor: number;
@@ -83,6 +85,7 @@ export interface Radar {
   total_implied_usd: number;
   total_airdrop_pool_usd: number;
   global_multiple: number;
+  global_comps: number;
   category_multiples: { category: string; multiple: number; comps: number }[];
   categories: string[];
   chains: string[];
@@ -160,7 +163,7 @@ function screenReason(p: Protocol): string | null {
  * tokenised protocols in the category, shrunk toward the global median
  * when a category has few traded peers to learn from.
  */
-function categoryMultiples(snapshot: Snapshot): { map: Map<string, number>; global: number; table: Radar['category_multiples'] } {
+function categoryMultiples(snapshot: Snapshot): { map: Map<string, number>; global: number; table: Radar['category_multiples']; counts: Map<string, number>; total: number } {
   const byCategory = new Map<string, number[]>();
   const all: number[] = [];
   for (const p of snapshot.protocols) {
@@ -175,6 +178,8 @@ function categoryMultiples(snapshot: Snapshot): { map: Map<string, number>; glob
   }
   const global = median(all);
   const map = new Map<string, number>();
+  const counts = new Map<string, number>();
+  for (const [key, ratios] of byCategory) counts.set(key, ratios.length);
   const table: Radar['category_multiples'] = [];
   for (const key of [...byCategory.keys()].sort()) {
     const ratios = byCategory.get(key)!;
@@ -190,7 +195,7 @@ function categoryMultiples(snapshot: Snapshot): { map: Map<string, number>; glob
     table.push({ category: key, multiple: blended, comps: ratios.length });
   }
   table.sort((a, b) => b.multiple - a.multiple);
-  return { map, global, table };
+  return { map, global, table, counts, total: all.length };
 }
 
 function multipleFor(map: Map<string, number>, global: number, category: string | null): number {
@@ -220,7 +225,8 @@ function breadthFactor(chainCount: number): number {
 // ---- Farm plans ------------------------------------------------------
 // Steps are generated from the protocol's own record: its category picks
 // the playbook, its chains pick the gas figures, its TVL picks the size
-// tier. Every step names a cost and a time, because a plan without either
+// tier, and the closing steps quote its own TVL and seven-day move.
+// Every step names a cost and a time, because a plan without either
 // is a slogan. Figures are planning estimates in plain dollars, from the
 // chain's usual fee level, and the dashboard labels them as estimates.
 
@@ -249,7 +255,7 @@ function money(n: number): string {
   return `$${Math.round(n)}`;
 }
 
-type Playbook = 'dex' | 'lending' | 'bridge' | 'staking' | 'vault' | 'cex' | 'rwa' | 'generic';
+type Playbook = 'dex' | 'lending' | 'bridge' | 'staking' | 'vault' | 'cex' | 'rwa' | 'perps' | 'prediction' | 'cdp' | 'generic';
 
 function playbookFor(category: string | null): Playbook {
   switch (category) {
@@ -260,6 +266,9 @@ function playbookFor(category: string | null): Playbook {
     case 'Yield': case 'Risk Curators': case 'Onchain Capital Allocator': return 'vault';
     case 'CEX': return 'cex';
     case 'RWA': return 'rwa';
+    case 'Derivatives': return 'perps';
+    case 'Prediction Market': return 'prediction';
+    case 'CDP': case 'CDP Manager': return 'cdp';
     default: return 'generic';
   }
 }
@@ -268,7 +277,8 @@ function playbookFor(category: string | null): Playbook {
  * by playbook — the model's stated assumption, shown on the dashboard. */
 const AIRDROP_PCT: Record<Playbook, number> = {
   dex: 0.1, lending: 0.08, bridge: 0.07, staking: 0.05,
-  vault: 0.06, cex: 0.04, rwa: 0.05, generic: 0.06,
+  vault: 0.06, cex: 0.04, rwa: 0.05, perps: 0.09,
+  prediction: 0.07, cdp: 0.08, generic: 0.06,
 };
 
 function farmSteps(p: Protocol): string[] {
@@ -320,6 +330,27 @@ function farmSteps(p: Protocol): string[] {
     steps.push(
       `Rotate a smaller second deposit, about a quarter of the first, into its newer strategies as they open. Newer strategies usually carry fewer farmers per dollar, and the pair of positions takes 15 minutes a week to review.`,
     );
+  } else if (book === 'perps') {
+    steps.push(
+      `Trade ${p.name}'s perpetual markets every week: 5–8 modest positions of $100–$500 notional, opened and closed rather than left to drift. Budget ${gasText} a transaction in gas plus trading fees of about 0.05–0.1% a side, so a ${size} margin float costs roughly $10–$30 a month to keep active.`,
+    );
+    steps.push(
+      `Keep margin conservative: post at least three times the maintenance margin on any open position and never average into a losing one. Funding payments are this category's quiet cost — check the funding rate before holding a position over a weekend; 10 minutes a week of margin checks.`,
+    );
+  } else if (book === 'prediction') {
+    steps.push(
+      `Trade ${p.name}'s markets every week: take positions in 5–10 active markets at $25–$100 each, favouring markets that resolve within the month. Budget ${gasText} a transaction for deposits and withdrawals; the real cost is the spread, about 1–2% on liquid markets.`,
+    );
+    steps.push(
+      `Provide liquidity on two or three of its most-watched markets with ${size} split across them, and hold positions to resolution rather than flipping intraday. A long record of resolved positions is the visible history a prediction-market launch can measure; review weekly, 10 minutes.`,
+    );
+  } else if (book === 'cdp') {
+    steps.push(
+      `Deposit collateral into ${p.name} and mint its stablecoin against it: ${size} of a major asset (ETH or a liquid staking token) as collateral, minted to no more than 40% of its value. Entry is one deposit and one mint at ${gasText} each; a minted balance held over time is the record CDP launches reward.`,
+    );
+    steps.push(
+      `Hold the minted stablecoin in the protocol's own stability pool or vault rather than selling it, and keep the collateral ratio above 200% at all times. Check the position weekly, 10 minutes; liquidation, not the wait for a token, is how CDP farming loses money.`,
+    );
   } else if (book === 'cex') {
     steps.push(
       `Complete ${p.name}'s full KYC and keep one verified account in good standing; an exchange launch can only reward accounts it can pay. Setup takes about 30 minutes including document checks and costs nothing.`,
@@ -336,21 +367,49 @@ function farmSteps(p: Protocol): string[] {
     );
   } else {
     steps.push(
-      `Use ${p.name}'s core product on ${cheap} with ${size} of working capital, at least once a week, so the wallet builds a long, ordinary usage record. Each session costs about ${gasText} in gas and 15 minutes.`,
+      `Use ${p.name}'s core product on ${cheap} with ${size} of working capital, at least once a week, so the wallet builds a long, ordinary usage record. Each session costs ${gasText} in gas and 15 minutes.`,
     );
-    steps.push(
-      `Cover its other chains too (${chainList}): one genuine transaction a month on each. A launch can only reward activity its own record shows, and multi-chain users are the cheapest record to stand out in.`,
-    );
+    if (p.chains.length > 1) {
+      const others = p.chains.filter((c) => c !== cheap).slice(0, 3).join(', ');
+      steps.push(
+        `Cover its other chains too (${others}): one genuine transaction a month on each. A launch can only reward activity its own record shows, and multi-chain users are the cheapest record to stand out in.`,
+      );
+    } else {
+      steps.push(
+        `${p.name} runs on ${cheap} alone in the snapshot, so depth beats breadth: use a second surface of the same product — a second market, pool or vault — once a month, so the wallet's record is varied where a launch can see it. Fifteen minutes a month on top of the weekly session.`,
+      );
+    }
   }
 
+  // The closing steps are written per protocol, not pasted: each one
+  // quotes this protocol's own record — its chain count and what counts
+  // in its category, its cheapest chain's gas, its TVL and its seven-day
+  // move — so two protocols' plans differ in their figures, not just
+  // in their names.
+  const tiebreak: Record<Playbook, string> = {
+    dex: 'volume and liquidity are usually scored separately, and holding both records costs little more than holding one',
+    lending: 'supplied balances on snapshot day are usually what counts, so keep the position supplied through season ends',
+    bridge: 'routes in both directions usually count separately, and every crossing is already in your log',
+    staking: 'a held receipt token is the record; moving it between wallets can break the trail a claim would follow',
+    vault: 'deposit age is usually weighted, so an early steady deposit is worth more than a later large one',
+    cex: 'a verified account in good standing is the record; keep the same account rather than opening new ones',
+    rwa: 'completed eligibility checks are part of the record, so finish onboarding before the first deposit',
+    perps: 'volume counts, but so does survival — an account liquidated to zero rarely qualifies for anything',
+    prediction: 'resolved positions are the record a launch can verify, so let markets settle instead of closing early',
+    cdp: 'a minted balance held across snapshots is the record; repaying early erases it',
+    generic: 'off-chain activity is free to keep and is often the tie-breaker between equal on-chain records',
+  };
   steps.push(
-    `Join its points, quests or season program if it runs one, and its governance forum or Discord with the same wallet linked. Fifteen minutes a week; off-chain activity is free to keep and is often the tie-breaker between equal on-chain records.`,
+    `Join ${p.name}'s points, quests or season program if it runs one, with the same wallet linked on every chain it serves (${p.chains.length} ${p.chains.length === 1 ? 'chain' : 'chains'} in the snapshot). Fifteen minutes a week; ${tiebreak[book]}.`,
   );
   steps.push(
-    `Keep a simple log — date, action, amount, transaction hash — in a spreadsheet as you go, 5 minutes a session. If a snapshot or claim ever asks you to prove the record, the log is the proof, and it costs nothing to keep from day one.`,
+    `Keep a simple log — date, action, amount, transaction hash — in a spreadsheet as you go, 5 minutes a session. Most of the activity sits on ${cheap} at ${gasText} a transaction, so the log doubles as the cost record; if a snapshot or claim ever asks you to prove the record, the log is the proof.`,
   );
+  const trend = p.change_7d === null
+    ? 'the snapshot records no seven-day TVL change for it'
+    : `its TVL moved ${p.change_7d >= 0 ? '+' : ''}${p.change_7d.toFixed(1)}% in the snapshot's last seven days`;
   steps.push(
-    `Review the position monthly: stop adding if the protocol announces a token with terms that exclude your region, if its TVL falls by half in a month, or if a contract incident is disclosed. Farming is a cost you choose weekly, never a sunk cost you must defend.`,
+    `Review monthly against the snapshot's own baseline: ${p.name} held ${money(p.tvl_usd)} of TVL and ${trend}. Stop adding if it announces a token whose terms exclude your region, if its TVL falls by half in a month, or if a contract incident is disclosed — farming is a cost you choose weekly, never a sunk cost you must defend.`,
   );
   return steps;
 }
@@ -358,7 +417,7 @@ function farmSteps(p: Protocol): string[] {
 // ---- The board ---------------------------------------------------------
 
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Radar } {
-  const { map, global, table } = categoryMultiples(snapshot);
+  const { map, global, table, counts, total: globalComps } = categoryMultiples(snapshot);
   const watch = new Set(snapshot.watchlist);
   const preTokenAll = snapshot.protocols.filter(isPreToken);
   const screened = preTokenAll
@@ -387,9 +446,15 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     // An illustrative farmer count that scales with the protocol's size:
     // one farmer per $25k of TVL, held between 2,000 and 200,000.
     const farmers = clamp(Math.round(p.tvl_usd / 25_000), 2_000, 200_000);
+    // How many traded peers priced this row: its category's own comp
+    // count, or every traded protocol when the category has none and
+    // the global median did the pricing. The dashboard shows it beside
+    // the equation so the multiple's evidence is visible, not implied.
+    const peerCount = p.category === null ? globalComps : (counts.get(p.category) ?? 0);
     return {
       p, multiple, ageDays, momentum, age, breadth, implied, pct, pool,
       perFarmer: Math.round(pool / farmers),
+      peerCount, baseValue: Math.round(p.tvl_usd * multiple),
     };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : 1));
@@ -405,6 +470,8 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     age_days: s.ageDays,
     watchlist: watch.has(s.p.slug),
     multiple: s.multiple,
+    peer_count: s.peerCount,
+    base_value_usd: s.baseValue,
     momentum_factor: s.momentum,
     age_factor: s.age,
     breadth_factor: s.breadth,
@@ -434,6 +501,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     total_implied_usd: rows.reduce((sum, r) => sum + r.implied_value_usd, 0),
     total_airdrop_pool_usd: rows.reduce((sum, r) => sum + r.airdrop_pool_usd, 0),
     global_multiple: global,
+    global_comps: globalComps,
     category_multiples: table,
     categories: [...new Set(rows.map((r) => r.category ?? 'Uncategorised'))].sort(),
     chains: [...new Set(rows.flatMap((r) => r.chains))].sort(),
