@@ -86,7 +86,14 @@ export interface Radar {
   total_airdrop_pool_usd: number;
   global_multiple: number;
   global_comps: number;
-  category_multiples: { category: string; multiple: number; comps: number }[];
+  category_multiples: {
+    category: string;
+    multiple: number;
+    comps: number;
+    /** The traded peers behind the multiple, largest market cap first —
+     * the dashboard names them so the pricing evidence can be checked. */
+    peers: { name: string; mcap_usd: number; tvl_usd: number; ratio: number }[];
+  }[];
   categories: string[];
   chains: string[];
   rows: RadarRow[];
@@ -165,6 +172,7 @@ function screenReason(p: Protocol): string | null {
  */
 function categoryMultiples(snapshot: Snapshot): { map: Map<string, number>; global: number; table: Radar['category_multiples']; counts: Map<string, number>; total: number } {
   const byCategory = new Map<string, number[]>();
+  const peersByCategory = new Map<string, { name: string; mcap_usd: number; tvl_usd: number; ratio: number }[]>();
   const all: number[] = [];
   for (const p of snapshot.protocols) {
     if (p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0) {
@@ -174,6 +182,9 @@ function categoryMultiples(snapshot: Snapshot): { map: Map<string, number>; glob
       const list = byCategory.get(key) ?? [];
       list.push(ratio);
       byCategory.set(key, list);
+      const peers = peersByCategory.get(key) ?? [];
+      peers.push({ name: p.name, mcap_usd: p.mcap_usd, tvl_usd: p.tvl_usd, ratio });
+      peersByCategory.set(key, peers);
     }
   }
   const global = median(all);
@@ -192,7 +203,9 @@ function categoryMultiples(snapshot: Snapshot): { map: Map<string, number>; glob
     // category's outliers must not price the whole board.
     const blended = clamp(own * weight + global * (1 - weight), 0.02, 3);
     map.set(key, blended);
-    table.push({ category: key, multiple: blended, comps: ratios.length });
+    const peers = (peersByCategory.get(key) ?? [])
+      .sort((a, b) => b.mcap_usd - a.mcap_usd || (a.name < b.name ? -1 : 1));
+    table.push({ category: key, multiple: blended, comps: ratios.length, peers });
   }
   table.sort((a, b) => b.multiple - a.multiple);
   return { map, global, table, counts, total: all.length };
@@ -226,9 +239,11 @@ function breadthFactor(chainCount: number): number {
 // Steps are generated from the protocol's own record: its category picks
 // the playbook, its chains pick the gas figures, its TVL picks the size
 // tier, and the closing steps quote its own TVL and seven-day move.
-// Every step names a cost and a time, because a plan without either
-// is a slogan. Figures are planning estimates in plain dollars, from the
-// chain's usual fee level, and the dashboard labels them as estimates.
+// Every step names an action, a dollar cost (or says it is free), and a
+// time, and names the risk or requirement where the category has one —
+// a plan without those is a slogan. Figures are planning estimates in
+// plain dollars, from the chain's usual fee level, and the dashboard
+// labels them as estimates.
 
 /** Usual cost of one meaningful on-chain action, in dollars, by chain. */
 const GAS_USD: Record<string, number> = {
@@ -292,61 +307,61 @@ function farmSteps(p: Protocol): string[] {
   const steps: string[] = [];
 
   steps.push(
-    `Set up one wallet for ${p.name} and fund it on ${cheap}, its cheapest chain in the snapshot (${gasText} a transaction there). Keep this wallet separate from your main funds; setup takes about 20 minutes and under $5 in first gas.`,
+    `Set up one wallet for ${p.name} and fund it on ${cheap}, its cheapest chain in the snapshot (${gasText} a transaction there). Keep this wallet separate from your main funds and back its seed phrase up offline before funding it — a lost seed is the one farming cost no launch can repay. Setup takes about 20 minutes and under $5 in first gas.`,
   );
 
   if (book === 'dex') {
     steps.push(
-      `Trade on ${p.name} every week: 6–10 swaps of $100–$500 each way, favouring its main pairs. Budget ${gasText} a swap in gas and about 0.3% in fees and slippage, so a ${size} float costs roughly $15–$40 a month to keep active.`,
+      `Trade on ${p.name} every week: 6–10 swaps of $100–$500 each way, favouring its main pairs, about 30 minutes a week including the swaps. Budget ${gasText} a swap in gas and about 0.3% in fees and slippage, so a ${size} float costs roughly $15–$40 a month to keep active.`,
     );
     steps.push(
-      `Add liquidity to one of its top pools with ${size} split across both sides, and leave it in place rather than hopping pools. Pool fees offset part of the cost; check the position weekly, 10 minutes, and rebalance only when it drifts out of range.`,
+      `Add liquidity to one of its top pools with ${size} split across both sides, and leave it in place rather than hopping pools. Entry and exit cost ${gasText} each in gas and pool fees offset part of the carry; the risk is impermanent loss if the pair's prices diverge hard. Check the position weekly, 10 minutes, and rebalance only when it drifts out of range.`,
     );
   } else if (book === 'lending') {
     steps.push(
-      `Supply ${size} of a major asset (ETH or a main stablecoin) on ${p.name} and keep it supplied. Cost is one deposit at ${gasText} plus the opportunity cost of the capital; supplied balances are the record most lending launches reward.`,
+      `Supply ${size} of a major asset (ETH or a main stablecoin) on ${p.name} and keep it supplied. Cost is one deposit at ${gasText} plus the opportunity cost of the capital, and opening it takes about 5 minutes; supplied balances are the record most lending launches reward.`,
     );
     steps.push(
-      `Borrow 30–40% against the position and re-supply the borrowed asset, looping once, then hold the loop for weeks at a time. Keep the health factor above 2.0, spend 10 minutes a week checking it, and never let liquidation be the way the position ends.`,
+      `Borrow 30–40% against the position and re-supply the borrowed asset, looping once (two extra transactions at ${gasText} each), then hold the loop for weeks at a time. Keep the health factor above 2.0, spend 10 minutes a week checking it, and never let liquidation be the way the position ends.`,
     );
   } else if (book === 'bridge') {
     steps.push(
       `Bridge through ${p.name} on a route you actually use, $200–$1,000 a crossing, at least twice a month and in both directions where it allows. Each crossing costs ${gasText} in gas plus the bridge's own fee, shown before you sign.`,
     );
     steps.push(
-      `Spread crossings across the chains it serves (${chainList}) instead of repeating one route: route and chain variety is the visible record a bridge launch can measure. About 15 minutes a route, including the wait for finality.`,
+      `Spread crossings across the chains it serves (${chainList}) instead of repeating one route: route and chain variety is the visible record a bridge launch can measure. About 15 minutes a route, including the wait for finality — and never bridge more than you can leave idle for a day if a route pauses.`,
     );
   } else if (book === 'staking') {
     steps.push(
-      `Stake ${size} through ${p.name} and hold the receipt token rather than trading it. Entry costs one transaction at ${gasText}; the real cost is the lock-up, so size it as money you can leave for 3–6 months.`,
+      `Stake ${size} through ${p.name} and hold the receipt token rather than trading it; staking itself takes about 10 minutes. Entry costs one transaction at ${gasText}; the real cost is the lock-up and an unbonding wait that can run days to weeks, so size it as money you can leave for 3–6 months.`,
     );
     steps.push(
       `Put the receipt token to work in one integrated vault or pool the protocol lists, so the same capital earns a second record. Review monthly, 10 minutes, and keep the staking position itself untouched between reviews.`,
     );
   } else if (book === 'vault') {
     steps.push(
-      `Deposit ${size} into ${p.name}'s flagship vault or strategy and stay deposited across weekly snapshots. Entry is one deposit at ${gasText}; vault launches measure time-weighted balances, so steady weeks beat one large day.`,
+      `Deposit ${size} into ${p.name}'s flagship vault or strategy and stay deposited across weekly snapshots; the deposit itself takes about 10 minutes. Entry is one deposit at ${gasText}; vault launches measure time-weighted balances, so steady weeks beat one large day.`,
     );
     steps.push(
-      `Rotate a smaller second deposit, about a quarter of the first, into its newer strategies as they open. Newer strategies usually carry fewer farmers per dollar, and the pair of positions takes 15 minutes a week to review.`,
+      `Rotate a smaller second deposit, about a quarter of the first, into its newer strategies as they open — moving it costs one withdrawal and one deposit at ${gasText} each. Newer strategies usually carry fewer farmers per dollar, and the pair of positions takes 15 minutes a week to review.`,
     );
   } else if (book === 'perps') {
     steps.push(
-      `Trade ${p.name}'s perpetual markets every week: 5–8 modest positions of $100–$500 notional, opened and closed rather than left to drift. Budget ${gasText} a transaction in gas plus trading fees of about 0.05–0.1% a side, so a ${size} margin float costs roughly $10–$30 a month to keep active.`,
+      `Trade ${p.name}'s perpetual markets every week: 5–8 modest positions of $100–$500 notional, opened and closed rather than left to drift, about 20 minutes a week placing them. Budget ${gasText} a transaction in gas plus trading fees of about 0.05–0.1% a side, so a ${size} margin float costs roughly $10–$30 a month to keep active.`,
     );
     steps.push(
       `Keep margin conservative: post at least three times the maintenance margin on any open position and never average into a losing one. Funding payments are this category's quiet cost — check the funding rate before holding a position over a weekend; 10 minutes a week of margin checks.`,
     );
   } else if (book === 'prediction') {
     steps.push(
-      `Trade ${p.name}'s markets every week: take positions in 5–10 active markets at $25–$100 each, favouring markets that resolve within the month. Budget ${gasText} a transaction for deposits and withdrawals; the real cost is the spread, about 1–2% on liquid markets.`,
+      `Trade ${p.name}'s markets every week: take positions in 5–10 active markets at $25–$100 each, favouring markets that resolve within the month, about 20 minutes a week. Budget ${gasText} a transaction for deposits and withdrawals; the real cost is the spread, about 1–2% on liquid markets.`,
     );
     steps.push(
-      `Provide liquidity on two or three of its most-watched markets with ${size} split across them, and hold positions to resolution rather than flipping intraday. A long record of resolved positions is the visible history a prediction-market launch can measure; review weekly, 10 minutes.`,
+      `Provide liquidity on two or three of its most-watched markets with ${size} split across them, and hold positions to resolution rather than flipping intraday — the cost is capital locked until each market resolves, days to weeks at a time. A long record of resolved positions is the visible history a prediction-market launch can measure; review weekly, 10 minutes.`,
     );
   } else if (book === 'cdp') {
     steps.push(
-      `Deposit collateral into ${p.name} and mint its stablecoin against it: ${size} of a major asset (ETH or a liquid staking token) as collateral, minted to no more than 40% of its value. Entry is one deposit and one mint at ${gasText} each; a minted balance held over time is the record CDP launches reward.`,
+      `Deposit collateral into ${p.name} and mint its stablecoin against it: ${size} of a major asset (ETH or a liquid staking token) as collateral, minted to no more than 40% of its value. Entry is one deposit and one mint at ${gasText} each and takes about 20 minutes to open; a minted balance held over time is the record CDP launches reward.`,
     );
     steps.push(
       `Hold the minted stablecoin in the protocol's own stability pool or vault rather than selling it, and keep the collateral ratio above 200% at all times. Check the position weekly, 10 minutes; liquidation, not the wait for a token, is how CDP farming loses money.`,
@@ -360,10 +375,10 @@ function farmSteps(p: Protocol): string[] {
     );
   } else if (book === 'rwa') {
     steps.push(
-      `Complete ${p.name}'s onboarding and eligibility checks first — real-world-asset platforms gate deposits by jurisdiction. Allow an hour for the paperwork; there is no way to farm this category anonymously.`,
+      `Complete ${p.name}'s onboarding and eligibility checks first — real-world-asset platforms gate deposits by jurisdiction, and the checks themselves are free. Allow an hour for the paperwork; there is no way to farm this category anonymously.`,
     );
     steps.push(
-      `Deposit ${size} into its shortest-duration product and roll it at maturity instead of withdrawing. Yields are stated per product; the launch record is a held balance across several maturities, reviewed 15 minutes a month.`,
+      `Deposit ${size} into its shortest-duration product and roll it at maturity instead of withdrawing; entry is one deposit at ${gasText} on ${cheap}. Yields are stated per product; the launch record is a held balance across several maturities, reviewed 15 minutes a month.`,
     );
   } else {
     steps.push(
@@ -372,11 +387,11 @@ function farmSteps(p: Protocol): string[] {
     if (p.chains.length > 1) {
       const others = p.chains.filter((c) => c !== cheap).slice(0, 3).join(', ');
       steps.push(
-        `Cover its other chains too (${others}): one genuine transaction a month on each. A launch can only reward activity its own record shows, and multi-chain users are the cheapest record to stand out in.`,
+        `Cover its other chains too (${others}): one genuine transaction a month on each, about 10 minutes a chain. Each transaction costs that chain's usual fee — ${gasText} on ${cheap}, more on Ethereum. A launch can only reward activity its own record shows, and multi-chain users are the cheapest record to stand out in.`,
       );
     } else {
       steps.push(
-        `${p.name} runs on ${cheap} alone in the snapshot, so depth beats breadth: use a second surface of the same product — a second market, pool or vault — once a month, so the wallet's record is varied where a launch can see it. Fifteen minutes a month on top of the weekly session.`,
+        `${p.name} runs on ${cheap} alone in the snapshot, so depth beats breadth: use a second surface of the same product — a second market, pool or vault — once a month at ${gasText} a transaction, so the wallet's record is varied where a launch can see it. Fifteen minutes a month on top of the weekly session.`,
       );
     }
   }
@@ -400,16 +415,16 @@ function farmSteps(p: Protocol): string[] {
     generic: 'off-chain activity is free to keep and is often the tie-breaker between equal on-chain records',
   };
   steps.push(
-    `Join ${p.name}'s points, quests or season program if it runs one, with the same wallet linked on every chain it serves (${p.chains.length} ${p.chains.length === 1 ? 'chain' : 'chains'} in the snapshot). Fifteen minutes a week; ${tiebreak[book]}.`,
+    `Join ${p.name}'s points, quests or season program if it runs one, with the same wallet linked on every chain it serves (${p.chains.length} ${p.chains.length === 1 ? 'chain' : 'chains'} in the snapshot). It costs nothing but the time — fifteen minutes a week; ${tiebreak[book]}.`,
   );
   steps.push(
-    `Keep a simple log — date, action, amount, transaction hash — in a spreadsheet as you go, 5 minutes a session. Most of the activity sits on ${cheap} at ${gasText} a transaction, so the log doubles as the cost record; if a snapshot or claim ever asks you to prove the record, the log is the proof.`,
+    `Keep a simple log — date, action, amount, transaction hash — in a spreadsheet as you go; it costs nothing and takes 5 minutes a session. Most of the activity sits on ${cheap} at ${gasText} a transaction, so the log doubles as the cost record; if a snapshot or claim ever asks you to prove the record, the log is the proof.`,
   );
   const trend = p.change_7d === null
     ? 'the snapshot records no seven-day TVL change for it'
     : `its TVL moved ${p.change_7d >= 0 ? '+' : ''}${p.change_7d.toFixed(1)}% in the snapshot's last seven days`;
   steps.push(
-    `Review monthly against the snapshot's own baseline: ${p.name} held ${money(p.tvl_usd)} of TVL and ${trend}. Stop adding if it announces a token whose terms exclude your region, if its TVL falls by half in a month, or if a contract incident is disclosed — farming is a cost you choose weekly, never a sunk cost you must defend.`,
+    `Review monthly against the snapshot's own baseline — 30 minutes a month, and it costs nothing but the half hour: ${p.name} held ${money(p.tvl_usd)} of TVL and ${trend}. Stop adding if it announces a token whose terms exclude your region, if its TVL falls by half in a month, or if a contract incident is disclosed — farming is a cost you choose weekly, never a sunk cost you must defend.`,
   );
   return steps;
 }
